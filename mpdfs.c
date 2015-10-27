@@ -214,6 +214,14 @@ struct mpdfs_command {
 	bool (*mpd_action)(struct mpd_connection *);
 };
 
+static bool mpdfs_toggle_pause(struct mpd_connection *con)
+{
+	int current;
+	do_status(con, &current, NULL, NULL, NULL, NULL);
+
+	return current == -1 ? mpd_run_play(con) : mpd_run_toggle_pause(con);
+}
+
 static const struct mpdfs_command commands[] = {
 	{
 		.path = "status",
@@ -243,7 +251,7 @@ static const struct mpdfs_command commands[] = {
 	{
 		.path = "pause",
 		.id   = MPDFS_PAUSE,
-		.mpd_action = mpd_run_toggle_pause,
+		.mpd_action = mpdfs_toggle_pause,
 	},
 	{
 		.path = "stop",
