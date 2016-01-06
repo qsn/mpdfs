@@ -23,6 +23,7 @@ struct mpdfs_priv {
 	struct mpd_connection *con;
 	struct playlist playlist;
 	pthread_mutex_t mutex;
+	char *root;
 	FILE *logfile;
 	pid_t pping;
 };
@@ -429,7 +430,7 @@ static int mpdfs_readlink(const char *path, char *buf, size_t size)
 		item = find_current(&priv->playlist);
 		if (!item)
 			return -EIO;
-		strlcpy(buf, item->str, size);
+		snprintf(buf, size, "%s/%s", priv->root, item->str);
 		return 0;
 	}
 
@@ -529,6 +530,7 @@ int main(int argc, char **argv)
 	    pthread_mutex_init(&priv->mutex, &attr))
 		goto err_init;
 
+	priv->root = argv[1];
 	priv->logfile = fopen("/tmp/mpdlog", "a");
 	priv->con = mpd_connection_new("127.0.0.1", 6600, 0);
 	if (!priv->con)
