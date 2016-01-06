@@ -486,6 +486,47 @@ static int mpdfs_unlink(const char *path)
 	return 0;
 }
 
+static int mpdfs_rename(const char *path, const char *newpath)
+{
+	struct mpdfs_priv *priv = fuse_get_context()->private_data;
+	struct playlist_item *item;
+	long int newpos;
+	char *endptr;
+
+	fprintf(priv->logfile, "rename %s to %s\n", path, newpath);
+	fflush(priv->logfile);
+
+	if (!path || *path != '/' || !newpath || *newpath != '/')
+		return -ENOENT;
+
+	if (strcmp(path, "/") == 0 || strcmp(path, "/current") == 0 || check_builtin_path(path))
+		return -EPERM;
+
+	pthread_mutex_lock(&priv->mutex);
+	item = find_in_playlist(path, &priv->playlist);
+	if (!item) {
+		pthread_mutex_unlock(&priv->mutex);
+		return -ENOENT;
+	}
+
+	newpos = strtol(newpath + 1, &endptr, 0);
+	if (*endptr != 0) {
+		pthread_mutex_unlock(&priv->mutex);
+		return -EINVAL;
+	}
+
+	if (!mpd_run_move(priv->con, item->pos, newpos)) {
+		check_error(priv->con, priv->logfile, exit_on_failure);
+		pthread_mutex_unlock(&priv->mutex);
+		return -EIO;
+	}
+	pthread_mutex_unlock(&priv->mutex);
+
+	update(priv);
+
+	return 0;
+}
+
 static void mpdfs_destroy(void *arg)
 {
 	struct mpdfs_priv *priv = arg;
@@ -510,6 +551,7 @@ static struct fuse_operations fops = {
 	.open     = mpdfs_open,
 	.read     = mpdfs_read,
 	.unlink   = mpdfs_unlink,
+	.rename   = mpdfs_rename,
 	.init     = mpdfs_init,
 	.destroy  = mpdfs_destroy,
 };
