@@ -286,7 +286,6 @@ static int mpdfs_getattr(const char *path, struct stat *stbuf)
 	const struct mpdfs_command *command;
 
 	fprintf(priv->logfile, "getattr %s\n", path);
-	fflush(priv->logfile);
 
 	memset(stbuf, 0, sizeof(*stbuf));
 	if (strcmp(path, "/") == 0) {
@@ -326,7 +325,6 @@ static int mpdfs_readdir(const char *path, void *buf, fuse_fill_dir_t filler, of
 	unsigned int i;
 
 	fprintf(priv->logfile, "readdir %s\n", path);
-	fflush(priv->logfile);
 	if (strcmp(path, "/") != 0)
 		return -ENOENT;
 
@@ -358,7 +356,6 @@ static int mpdfs_open(const char *path, struct fuse_file_info *fi)
 		return -EAGAIN;
 
 	fprintf(priv->logfile, "open %s\n", path);
-	fflush(priv->logfile);
 
 	command = check_builtin_path(path);
 	pthread_mutex_lock(&priv->mutex);
@@ -394,7 +391,6 @@ static int mpdfs_read(const char *path, char *buf, size_t size, off_t offset, st
 		return -EAGAIN;
 
 	fprintf(priv->logfile, "read %s\n", path);
-	fflush(priv->logfile);
 
 	command = check_builtin_path(path);
 	if (command && command->id == MPDFS_STATUS) {
@@ -459,7 +455,6 @@ static int mpdfs_unlink(const char *path)
 	struct playlist_item *item;
 
 	fprintf(priv->logfile, "unlink %s\n", path);
-	fflush(priv->logfile);
 
 	if (!path || *path != '/')
 		return -ENOENT;
@@ -494,7 +489,6 @@ static int mpdfs_rename(const char *path, const char *newpath)
 	char *endptr;
 
 	fprintf(priv->logfile, "rename %s to %s\n", path, newpath);
-	fflush(priv->logfile);
 
 	if (!path || *path != '/' || !newpath || *newpath != '/')
 		return -ENOENT;
@@ -574,6 +568,7 @@ int main(int argc, char **argv)
 
 	priv->root = argv[1];
 	priv->logfile = fopen("/tmp/mpdlog", "a");
+	setvbuf(priv->logfile, NULL, _IOLBF, BUFSIZ);
 	priv->con = mpd_connection_new("127.0.0.1", 6600, 0);
 	if (!priv->con)
 		goto err_init;
