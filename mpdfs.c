@@ -9,6 +9,7 @@
 #include <signal.h>
 #include <pthread.h>
 #include <sys/mman.h>
+#include <limits.h>
 
 #define FUSE_USE_VERSION 26
 #include <fuse.h>
@@ -557,10 +558,62 @@ static struct fuse_operations fops = {
 	.destroy  = mpdfs_destroy,
 };
 
+#define DEFAULT_LOGFILE "/tmp/log"
+#define DEFAULT_SERVER "127.0.0.1"
+#define DEFAULT_PORT 6600
+
+static void usage(void)
+{
+	printf("usage: mpdfs [-c server] [-p port] [-d | -D logfile] mountpoint\n");
+	exit(1);
+}
+
 int main(int argc, char **argv)
 {
 	int err;
 	pthread_mutexattr_t attr;
+
+	char opt;
+	unsigned short port = DEFAULT_PORT;
+	char *server = DEFAULT_SERVER;
+	bool debug = false;
+	char *logfile = NULL;
+
+	while ((opt = getopt(argc, argv, "hdD:c:p:")) != -1) {
+		switch (opt) {
+		case 'd':
+			debug = true;
+			if (!logfile)
+				logfile = DEFAULT_LOGFILE;
+			break;
+		case 'D':
+			debug = true;
+			logfile = optarg;
+			break;
+		case 'c':
+			server = optarg;
+			break;
+		case 'p': {
+			unsigned long p = strtoul(optarg, NULL, 10);
+			if (p != ULONG_MAX && p <= USHRT_MAX) {
+				port = (unsigned short) p;
+			} else {
+				printf("bad port number: %s\n", optarg);
+				usage();
+				return 1;
+			}
+			break;
+		}
+		default:
+			printf("unknown: %c\n", opt);
+			usage();
+		}
+	}
+
+	optind--;
+	argv[optind] = argv[0];
+	argv += optind;
+	argc -= optind;
 
 	priv = mmap(NULL, sizeof(*priv), PROT_READ|PROT_WRITE, MAP_SHARED|MAP_ANONYMOUS, -1, 0);
 	if (priv == MAP_FAILED) {
@@ -575,12 +628,14 @@ int main(int argc, char **argv)
 
 	priv->root = argv[1];
 
-	priv->logfile = fopen("/tmp/mpdlog", "a");
-	if (!priv->logfile) {
-		perror("open log file");
-		goto err_init;
+	if (logfile) {
+		priv->logfile = fopen(logfile, "a");
+		if (!priv->logfile) {
+			perror("open log file");
+			goto err_init;
+		}
+		setvbuf(priv->logfile, NULL, _IOLBF, BUFSIZ);
 	}
-	setvbuf(priv->logfile, NULL, _IOLBF, BUFSIZ);
 
 	priv->con = mpd_connection_new(server, port, 0);
 	if (!priv->con)
