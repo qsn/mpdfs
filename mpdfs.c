@@ -285,7 +285,8 @@ static int mpdfs_getattr(const char *path, struct stat *stbuf)
 	struct mpdfs_priv *priv = fuse_get_context()->private_data;
 	const struct mpdfs_command *command;
 
-	fprintf(priv->logfile, "getattr %s\n", path);
+	if (priv->logfile)
+		fprintf(priv->logfile, "getattr %s\n", path);
 
 	memset(stbuf, 0, sizeof(*stbuf));
 	if (strcmp(path, "/") == 0) {
@@ -324,7 +325,8 @@ static int mpdfs_readdir(const char *path, void *buf, fuse_fill_dir_t filler, of
 	struct playlist_item *item;
 	unsigned int i;
 
-	fprintf(priv->logfile, "readdir %s\n", path);
+	if (priv->logfile)
+		fprintf(priv->logfile, "readdir %s\n", path);
 	if (strcmp(path, "/") != 0)
 		return -ENOENT;
 
@@ -355,7 +357,8 @@ static int mpdfs_open(const char *path, struct fuse_file_info *fi)
 	if (!update(priv))
 		return -EAGAIN;
 
-	fprintf(priv->logfile, "open %s\n", path);
+	if (priv->logfile)
+		fprintf(priv->logfile, "open %s\n", path);
 
 	command = check_builtin_path(path);
 	pthread_mutex_lock(&priv->mutex);
@@ -390,7 +393,8 @@ static int mpdfs_read(const char *path, char *buf, size_t size, off_t offset, st
 	if (!update(priv))
 		return -EAGAIN;
 
-	fprintf(priv->logfile, "read %s\n", path);
+	if (priv->logfile)
+		fprintf(priv->logfile, "read %s\n", path);
 
 	command = check_builtin_path(path);
 	if (command && command->id == MPDFS_STATUS) {
@@ -454,7 +458,8 @@ static int mpdfs_unlink(const char *path)
 	struct mpdfs_priv *priv = fuse_get_context()->private_data;
 	struct playlist_item *item;
 
-	fprintf(priv->logfile, "unlink %s\n", path);
+	if (priv->logfile)
+		fprintf(priv->logfile, "unlink %s\n", path);
 
 	if (!path || *path != '/')
 		return -ENOENT;
@@ -488,7 +493,8 @@ static int mpdfs_rename(const char *path, const char *newpath)
 	long int newpos;
 	char *endptr;
 
-	fprintf(priv->logfile, "rename %s to %s\n", path, newpath);
+	if (priv->logfile)
+		fprintf(priv->logfile, "rename %s to %s\n", path, newpath);
 
 	if (!path || *path != '/' || !newpath || *newpath != '/')
 		return -ENOENT;
@@ -527,7 +533,8 @@ static void mpdfs_destroy(void *arg)
 
 	kill(priv->pping, SIGKILL);
 	mpd_connection_free(priv->con);
-	fclose(priv->logfile);
+	if (priv->logfile)
+		fclose(priv->logfile);
 }
 
 static struct mpdfs_priv *priv;
@@ -567,9 +574,15 @@ int main(int argc, char **argv)
 		goto err_init;
 
 	priv->root = argv[1];
+
 	priv->logfile = fopen("/tmp/mpdlog", "a");
+	if (!priv->logfile) {
+		perror("open log file");
+		goto err_init;
+	}
 	setvbuf(priv->logfile, NULL, _IOLBF, BUFSIZ);
-	priv->con = mpd_connection_new("127.0.0.1", 6600, 0);
+
+	priv->con = mpd_connection_new(server, port, 0);
 	if (!priv->con)
 		goto err_init;
 
@@ -598,5 +611,7 @@ err_fuse:
 err_fork:
 	mpd_connection_free(priv->con);
 err_init:
+	if (priv->logfile)
+		fclose(priv->logfile);
 	exit(EXIT_FAILURE);
 }
