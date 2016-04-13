@@ -450,10 +450,14 @@ static int mpdfs_read(const char *path, char *buf, size_t size, off_t offset, st
 	return find_in_playlist(path, &priv->playlist) ? 0 : -ENOENT;
 }
 
+#define MAX_PL_LEN 100 /* somewhat arbitrary limit, but who wants playlist names that long anyway? */
 static int mpdfs_write(const char *path, const char *buf, size_t size, off_t offset, struct fuse_file_info *fi)
 {
 	struct mpdfs_priv *priv = fuse_get_context()->private_data;
 	const struct mpdfs_command *command;
+	char name[MAX_PL_LEN + 1];
+	char *c;
+	size_t len;
 
 	if (priv->logfile)
 		fprintf(priv->logfile, "write %s\n", path);
@@ -462,6 +466,29 @@ static int mpdfs_write(const char *path, const char *buf, size_t size, off_t off
 	if (!command || !builtin_writable(command))
 		return -EPERM;
 
+	if (offset != 0)
+		return -EIO;
+
+	len = size > MAX_PL_LEN ? MAX_PL_LEN : size;
+	memcpy(name, buf, len);
+	name[len] = 0;
+	if ((c = strchr(name, '\n')))
+		*c = 0;
+
+	switch (command->id) {
+	case MPDFS_LOAD:
+		if (!mpd_run_load(priv->con, name))
+			check_error(priv->con, priv->logfile, exit_on_failure);
+		break;
+	case MPDFS_SAVE:
+		if (!mpd_run_save(priv->con, name))
+			check_error(priv->con, priv->logfile, exit_on_failure);
+		break;
+	}
+
+	/* return the size we got, ie disregard what we actually used,
+	 * otherwise the caller we probably retry at an offset and get
+	 * -EIO */
 	return size;
 }
 
