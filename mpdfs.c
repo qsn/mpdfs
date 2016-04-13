@@ -10,13 +10,14 @@
 #include <pthread.h>
 #include <sys/mman.h>
 #include <limits.h>
+#include <fcntl.h>
 
 #define FUSE_USE_VERSION 26
 #include <fuse.h>
 
 #include "lib.h"
 
-#define FLAG_EXEC 0x20
+#define FMODE_EXEC 0x20
 
 static bool exit_on_failure = false;
 
@@ -208,6 +209,8 @@ enum mpdfs_builtin_id {
 	MPDFS_PLAY,
 	MPDFS_STOP,
 	MPDFS_PAUSE,
+	MPDFS_SAVE,
+	MPDFS_LOAD,
 };
 
 struct mpdfs_command {
@@ -261,9 +264,24 @@ static const struct mpdfs_command commands[] = {
 		.mpd_action = mpd_run_stop,
 	},
 	{
+		.path = "save",
+		.id   = MPDFS_SAVE,
+		.mpd_action = NULL,
+	},
+	{
+		.path  = "load",
+		.id    = MPDFS_LOAD,
+		.mpd_action = NULL,
+	},
+	{
 		.id = MPDFS_NONE,
 	}
 };
+
+static bool builtin_writable(const struct mpdfs_command *command)
+{
+	return command->id == MPDFS_SAVE || command->id == MPDFS_LOAD;
+}
 
 static const struct mpdfs_command *check_builtin_path(const char *path)
 {
@@ -305,6 +323,9 @@ static int mpdfs_getattr(const char *path, struct stat *stbuf)
 		if (command->id == MPDFS_STATUS) {
 			stbuf->st_mode = S_IFREG | 0444;
 			stbuf->st_size = priv->playlist.current_pos >= 0 ? STATUS_LEN : 0;
+		} else if (command->id == MPDFS_SAVE || command->id == MPDFS_LOAD) {
+			stbuf->st_mode = S_IFREG | 0222;
+			stbuf->st_size = 0;
 		} else {
 			stbuf->st_mode = S_IFREG | 0555;
 			stbuf->st_size = SCRIPT_LEN;
@@ -364,15 +385,26 @@ static int mpdfs_open(const char *path, struct fuse_file_info *fi)
 	command = check_builtin_path(path);
 	pthread_mutex_lock(&priv->mutex);
 	if (command) {
-		/* execve = open(NORMAL | FLAG_EXEC) + open(NORMAL)
-		 * filter out the first call that has FLAG_EXEC, and only
+		if (!builtin_writable(command) && fi->flags & O_ACCMODE != O_RDONLY) {
+			err = -EPERM;
+			goto unlock;
+		}
+
+		/* execve = open(NORMAL | FMODE_EXEC) + open(NORMAL)
+		 * filter out the first call that has FMODE_EXEC, and only
 		 * tickle mpd on the second, or on a standard read
 		 */
-		if (command->mpd_action && !(fi->flags & FLAG_EXEC))
+		if (command->mpd_action && !(fi->flags & FMODE_EXEC)) {
 			if (!command->mpd_action(priv->con))
 				check_error(priv->con, priv->logfile, exit_on_failure);
+		}
 		err = 0;
 	} else if ((item = find_in_playlist(path, &priv->playlist))) {
+		if (fi->flags & O_ACCMODE != O_RDONLY) {
+			err = -EPERM;
+			goto unlock;
+		}
+
 		if (!mpd_run_play_pos(priv->con, item->pos)) {
 			check_error(priv->con, priv->logfile, exit_on_failure);
 			err = -EIO;
@@ -381,6 +413,7 @@ static int mpdfs_open(const char *path, struct fuse_file_info *fi)
 		}
 	}
 
+unlock:
 	pthread_mutex_unlock(&priv->mutex);
 
 	return err;
@@ -415,6 +448,48 @@ static int mpdfs_read(const char *path, char *buf, size_t size, off_t offset, st
 	}
 
 	return find_in_playlist(path, &priv->playlist) ? 0 : -ENOENT;
+}
+
+#define MAX_PL_LEN 100 /* somewhat arbitrary limit, but who wants playlist names that long anyway? */
+static int mpdfs_write(const char *path, const char *buf, size_t size, off_t offset, struct fuse_file_info *fi)
+{
+	struct mpdfs_priv *priv = fuse_get_context()->private_data;
+	const struct mpdfs_command *command;
+	char name[MAX_PL_LEN + 1];
+	char *c;
+	size_t len;
+
+	if (priv->logfile)
+		fprintf(priv->logfile, "write %s\n", path);
+
+	command = check_builtin_path(path);
+	if (!command || !builtin_writable(command))
+		return -EPERM;
+
+	if (offset != 0)
+		return -EIO;
+
+	len = size > MAX_PL_LEN ? MAX_PL_LEN : size;
+	memcpy(name, buf, len);
+	name[len] = 0;
+	if ((c = strchr(name, '\n')))
+		*c = 0;
+
+	switch (command->id) {
+	case MPDFS_LOAD:
+		if (!mpd_run_load(priv->con, name))
+			check_error(priv->con, priv->logfile, exit_on_failure);
+		break;
+	case MPDFS_SAVE:
+		if (!mpd_run_save(priv->con, name))
+			check_error(priv->con, priv->logfile, exit_on_failure);
+		break;
+	}
+
+	/* return the size we got, ie disregard what we actually used,
+	 * otherwise the caller we probably retry at an offset and get
+	 * -EIO */
+	return size;
 }
 
 static int mpdfs_readlink(const char *path, char *buf, size_t size)
@@ -546,12 +621,32 @@ static void *mpdfs_init(struct fuse_conn_info *arg)
 	return priv;
 }
 
+static int mpdfs_truncate(const char *path, off_t off)
+{
+	struct mpdfs_priv *priv = fuse_get_context()->private_data;
+	const struct mpdfs_command *command;
+
+	if (priv->logfile)
+		fprintf(priv->logfile, "truncate %s\n", path);
+
+	command = check_builtin_path(path);
+	if (!command || !builtin_writable(command))
+		return -EPERM;
+
+	if (off != 0)
+		return -EOPNOTSUPP;
+
+	return 0;
+}
+
 static struct fuse_operations fops = {
 	.getattr  = mpdfs_getattr,
 	.readdir  = mpdfs_readdir,
 	.readlink = mpdfs_readlink,
 	.open     = mpdfs_open,
 	.read     = mpdfs_read,
+	.write    = mpdfs_write,
+	.truncate = mpdfs_truncate,
 	.unlink   = mpdfs_unlink,
 	.rename   = mpdfs_rename,
 	.init     = mpdfs_init,
