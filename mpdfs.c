@@ -16,7 +16,7 @@
 
 #include "lib.h"
 
-#define FLAG_EXEC 0x20
+#define FMODE_EXEC 0x20
 
 static bool exit_on_failure = false;
 
@@ -364,13 +364,14 @@ static int mpdfs_open(const char *path, struct fuse_file_info *fi)
 	command = check_builtin_path(path);
 	pthread_mutex_lock(&priv->mutex);
 	if (command) {
-		/* execve = open(NORMAL | FLAG_EXEC) + open(NORMAL)
-		 * filter out the first call that has FLAG_EXEC, and only
+		/* execve = open(NORMAL | FMODE_EXEC) + open(NORMAL)
+		 * filter out the first call that has FMODE_EXEC, and only
 		 * tickle mpd on the second, or on a standard read
 		 */
-		if (command->mpd_action && !(fi->flags & FLAG_EXEC))
+		if (command->mpd_action && !(fi->flags & FMODE_EXEC)) {
 			if (!command->mpd_action(priv->con))
 				check_error(priv->con, priv->logfile, exit_on_failure);
+		}
 		err = 0;
 	} else if ((item = find_in_playlist(path, &priv->playlist))) {
 		if (!mpd_run_play_pos(priv->con, item->pos)) {
