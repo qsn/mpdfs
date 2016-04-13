@@ -10,6 +10,7 @@
 #include <pthread.h>
 #include <sys/mman.h>
 #include <limits.h>
+#include <fcntl.h>
 
 #define FUSE_USE_VERSION 26
 #include <fuse.h>
@@ -265,6 +266,11 @@ static const struct mpdfs_command commands[] = {
 	}
 };
 
+static bool builtin_writable(const struct mpdfs_command *command)
+{
+	return 0;
+}
+
 static const struct mpdfs_command *check_builtin_path(const char *path)
 {
 	unsigned int i;
@@ -364,6 +370,11 @@ static int mpdfs_open(const char *path, struct fuse_file_info *fi)
 	command = check_builtin_path(path);
 	pthread_mutex_lock(&priv->mutex);
 	if (command) {
+		if (!builtin_writable(command) && fi->flags & O_ACCMODE != O_RDONLY) {
+			err = -EPERM;
+			goto unlock;
+		}
+
 		/* execve = open(NORMAL | FMODE_EXEC) + open(NORMAL)
 		 * filter out the first call that has FMODE_EXEC, and only
 		 * tickle mpd on the second, or on a standard read
@@ -374,6 +385,11 @@ static int mpdfs_open(const char *path, struct fuse_file_info *fi)
 		}
 		err = 0;
 	} else if ((item = find_in_playlist(path, &priv->playlist))) {
+		if (fi->flags & O_ACCMODE != O_RDONLY) {
+			err = -EPERM;
+			goto unlock;
+		}
+
 		if (!mpd_run_play_pos(priv->con, item->pos)) {
 			check_error(priv->con, priv->logfile, exit_on_failure);
 			err = -EIO;
@@ -382,6 +398,7 @@ static int mpdfs_open(const char *path, struct fuse_file_info *fi)
 		}
 	}
 
+unlock:
 	pthread_mutex_unlock(&priv->mutex);
 
 	return err;
@@ -416,6 +433,21 @@ static int mpdfs_read(const char *path, char *buf, size_t size, off_t offset, st
 	}
 
 	return find_in_playlist(path, &priv->playlist) ? 0 : -ENOENT;
+}
+
+static int mpdfs_write(const char *path, const char *buf, size_t size, off_t offset, struct fuse_file_info *fi)
+{
+	struct mpdfs_priv *priv = fuse_get_context()->private_data;
+	const struct mpdfs_command *command;
+
+	if (priv->logfile)
+		fprintf(priv->logfile, "write %s\n", path);
+
+	command = check_builtin_path(path);
+	if (!command || !builtin_writable(command))
+		return -EPERM;
+
+	return size;
 }
 
 static int mpdfs_readlink(const char *path, char *buf, size_t size)
@@ -547,12 +579,32 @@ static void *mpdfs_init(struct fuse_conn_info *arg)
 	return priv;
 }
 
+static int mpdfs_truncate(const char *path, off_t off)
+{
+	struct mpdfs_priv *priv = fuse_get_context()->private_data;
+	const struct mpdfs_command *command;
+
+	if (priv->logfile)
+		fprintf(priv->logfile, "truncate %s\n", path);
+
+	command = check_builtin_path(path);
+	if (!command || !builtin_writable(command))
+		return -EPERM;
+
+	if (off != 0)
+		return -EOPNOTSUPP;
+
+	return 0;
+}
+
 static struct fuse_operations fops = {
 	.getattr  = mpdfs_getattr,
 	.readdir  = mpdfs_readdir,
 	.readlink = mpdfs_readlink,
 	.open     = mpdfs_open,
 	.read     = mpdfs_read,
+	.write    = mpdfs_write,
+	.truncate = mpdfs_truncate,
 	.unlink   = mpdfs_unlink,
 	.rename   = mpdfs_rename,
 	.init     = mpdfs_init,
