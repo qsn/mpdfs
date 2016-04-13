@@ -209,6 +209,8 @@ enum mpdfs_builtin_id {
 	MPDFS_PLAY,
 	MPDFS_STOP,
 	MPDFS_PAUSE,
+	MPDFS_SAVE,
+	MPDFS_LOAD,
 };
 
 struct mpdfs_command {
@@ -262,13 +264,23 @@ static const struct mpdfs_command commands[] = {
 		.mpd_action = mpd_run_stop,
 	},
 	{
+		.path = "save",
+		.id   = MPDFS_SAVE,
+		.mpd_action = NULL,
+	},
+	{
+		.path  = "load",
+		.id    = MPDFS_LOAD,
+		.mpd_action = NULL,
+	},
+	{
 		.id = MPDFS_NONE,
 	}
 };
 
 static bool builtin_writable(const struct mpdfs_command *command)
 {
-	return 0;
+	return command->id == MPDFS_SAVE || command->id == MPDFS_LOAD;
 }
 
 static const struct mpdfs_command *check_builtin_path(const char *path)
@@ -311,6 +323,9 @@ static int mpdfs_getattr(const char *path, struct stat *stbuf)
 		if (command->id == MPDFS_STATUS) {
 			stbuf->st_mode = S_IFREG | 0444;
 			stbuf->st_size = priv->playlist.current_pos >= 0 ? STATUS_LEN : 0;
+		} else if (command->id == MPDFS_SAVE || command->id == MPDFS_LOAD) {
+			stbuf->st_mode = S_IFREG | 0222;
+			stbuf->st_size = 0;
 		} else {
 			stbuf->st_mode = S_IFREG | 0555;
 			stbuf->st_size = SCRIPT_LEN;
